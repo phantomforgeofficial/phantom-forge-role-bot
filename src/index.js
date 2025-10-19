@@ -194,6 +194,18 @@ client.on('interactionCreate', async (ix) => {
   }
 });
 
+// --- Klein health/keepalive servertje (voor Render Web Service) ---
+import express from 'express';
+
+const app = express();
+app.get('/', (_req, res) => res.send('Discord role bot is running'));
+app.get('/health', (_req, res) => res.status(200).send('ok'));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🌐 Health server listening on port ${PORT}`);
+});
+
 /* -------------------------- Login -------------------------- */
 if (!process.env.DISCORD_TOKEN) {
   console.error('❌ DISCORD_TOKEN ontbreekt in .env');
