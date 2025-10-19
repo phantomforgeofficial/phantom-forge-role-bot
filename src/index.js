@@ -1,5 +1,6 @@
 // src/index.js
 import 'dotenv/config';
+import express from 'express';
 import {
   Client,
   GatewayIntentBits,
@@ -8,10 +9,14 @@ import {
   REST,
   Routes,
   SlashCommandBuilder,
+  EmbedBuilder,
 } from 'discord.js';
 import { addAutorole, removeAutorole, listAutoroles } from './storage.js';
 
-/* ------------------------- Helpers ------------------------- */
+/* =========================== Config =========================== */
+const STATUS_CHANNEL_ID = '1429121620194234478'; // <- Jouw status-kanaal
+
+/* =========================== Helpers ========================== */
 const ok   = (m) => ({ content: `✅ ${m}`, ephemeral: true });
 const warn = (m) => ({ content: `⚠️ ${m}`, ephemeral: true });
 const err  = (m) => ({ content: `❌ ${m}`, ephemeral: true });
@@ -22,11 +27,25 @@ function canManageRole(guild, role, meMember) {
   if (role.id === guild.id) return false;  // @everyone
   return meMember.roles.highest.position > role.position;
 }
-
 const needManageRoles = (member) =>
   member.permissions.has(PermissionFlagsBits.ManageRoles);
 
-/* --------------------- Slash Commands Def ------------------ */
+function pad(n){ return String(n).padStart(2, '0'); }
+function formatHMS(totalSeconds){
+  const s = Math.floor(totalSeconds % 60);
+  const m = Math.floor((totalSeconds / 60) % 60);
+  const h = Math.floor(totalSeconds / 3600);
+  return `${pad(h)}:${pad(m)}:${pad(s)}`;
+}
+function fmtDate(d = new Date()) {
+  // Nederlands-achtige weergave; pas aan naar smaak
+  return d.toLocaleString(undefined, {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  });
+}
+
+/* ====================== Slash Commands Def ==================== */
 const slashCommands = [
   new SlashCommandBuilder()
     .setName('add-autorole')
@@ -55,7 +74,7 @@ const slashCommands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
 ].map(c => c.toJSON());
 
-/* ------------------------ Client --------------------------- */
+/* ============================ Client ========================== */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -64,7 +83,27 @@ const client = new Client({
   partials: [Partials.GuildMember],
 });
 
-/* ------------- Register commands on startup ---------------- */
+/* ===================== Presence helpers ====================== */
+async function getGuildName() {
+  const gid = process.env.GUILD_ID;
+  if (gid) {
+    const g = client.guilds.cache.get(gid) ?? await client.guilds.fetch(gid).catch(() => null);
+    if (g) return g.name;
+  }
+  const first = client.guilds.cache.first();
+  return first?.name || 'servers';
+}
+async function refreshPresence() {
+  try {
+    const name = await getGuildName();
+    client.user?.setPresence({
+      activities: [{ name, type: 3 }], // WATCHING
+      status: 'online',
+    });
+  } catch (e) { console.error('presence error:', e); }
+}
+
+/* ================== Register commands on boot ================= */
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   if (!process.env.CLIENT_ID) {
@@ -83,24 +122,86 @@ async function registerCommands() {
         Routes.applicationCommands(process.env.CLIENT_ID),
         { body: slashCommands }
       );
-      console.log('✅ Global commands geregistreerd (kan even duren om te verschijnen)');
+      console.log('✅ Global commands geregistreerd (kan even duren)');
     }
   } catch (e) {
     console.error('❌ Fout bij registreren van commands:', e);
   }
 }
 
-/* -------------------------- Ready -------------------------- */
+/* ======================= Status Updater ======================= */
+let statusInterval = null;
+let statusMessageId = null;
+const botStart = Date.now();
+
+function buildStatusEmbed(guildName) {
+  const uptime = formatHMS(process.uptime());
+  const ping = Math.max(0, Math.round(client.ws.ping));
+  const lastUpdate = fmtDate();
+
+  return new EmbedBuilder()
+    .setColor(0x7352FF)
+    .setTitle('🕒 Phantom Forge Tickets Bot Status')
+    .setDescription('')
+    .addFields(
+      { name: 'Active:', value: '✅ Online', inline: false },
+      { name: 'Uptime', value: `\`${uptime}\``, inline: true },
+      { name: 'Ping', value: `${ping} ms`, inline: true },
+      { name: 'Last update', value: lastUpdate, inline: false },
+    )
+    .setFooter({ text: `Live updated every second | ${guildName}` });
+}
+
+async function startStatusLoop() {
+  try {
+    const channel = await client.channels.fetch(STATUS_CHANNEL_ID).catch(() => null);
+    if (!channel || !channel.isTextBased()) {
+      console.warn('⚠️ Status-kanaal niet gevonden of niet tekst-gebaseerd.');
+      return;
+    }
+
+    const guildName = await getGuildName();
+    const embed = buildStatusEmbed(guildName);
+
+    // Plaats of hergebruik bericht
+    let msg = null;
+    if (statusMessageId) {
+      msg = await channel.messages.fetch(statusMessageId).catch(() => null);
+    }
+    if (!msg) {
+      msg = await channel.send({ embeds: [embed] });
+      statusMessageId = msg.id;
+    } else {
+      await msg.edit({ embeds: [embed] });
+    }
+
+    // Interval (elke seconde)
+    if (statusInterval) clearInterval(statusInterval);
+    statusInterval = setInterval(async () => {
+      try {
+        const gName = await getGuildName();
+        const upd = buildStatusEmbed(gName);
+        await msg.edit({ embeds: [upd] });
+      } catch (e) {
+        console.error('status update error:', e);
+      }
+    }, 1000);
+  } catch (e) {
+    console.error('startStatusLoop error:', e);
+  }
+}
+
+/* =========================== Ready =========================== */
 client.once('ready', async () => {
   console.log(`✅ Ingelogd als ${client.user.tag}`);
-  client.user?.setPresence({
-    activities: [{ name: 'roles beheren', type: 3 }], // Watching
-    status: 'online',
-  });
   await registerCommands();
+  await refreshPresence();
+  await startStatusLoop();
 });
+client.on('guildCreate', async () => { await refreshPresence(); });
+client.on('guildDelete', async () => { await refreshPresence(); });
 
-/* --------------- Autorole on member join ------------------- */
+/* =================== Autorole on member join ================= */
 client.on('guildMemberAdd', async (member) => {
   try {
     const roles = await listAutoroles(member.guild.id);
@@ -118,7 +219,7 @@ client.on('guildMemberAdd', async (member) => {
   }
 });
 
-/* --------------------- Command handler --------------------- */
+/* ======================= Command handler ===================== */
 client.on('interactionCreate', async (ix) => {
   try {
     if (!ix.isChatInputCommand()) return;
@@ -184,29 +285,22 @@ client.on('interactionCreate', async (ix) => {
       }
 
       default:
-        return; // andere commands negeren
+        return;
     }
   } catch (e) {
     console.error('interaction error:', e);
-    if (ix.isRepliable()) {
-      try { await ix.reply(err('Er ging iets mis.')); } catch {}
-    }
+    if (ix.isRepliable()) { try { await ix.reply(err('Er ging iets mis.')); } catch {} }
   }
 });
 
-// --- Klein health/keepalive servertje (voor Render Web Service) ---
-import express from 'express';
-
+/* ===================== Health server (Render) ================= */
 const app = express();
 app.get('/', (_req, res) => res.send('Discord role bot is running'));
 app.get('/health', (_req, res) => res.status(200).send('ok'));
-
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🌐 Health server listening on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🌐 Health server listening on ${PORT}`));
 
-/* -------------------------- Login -------------------------- */
+/* ============================ Login ========================== */
 if (!process.env.DISCORD_TOKEN) {
   console.error('❌ DISCORD_TOKEN ontbreekt in .env');
   process.exit(1);
