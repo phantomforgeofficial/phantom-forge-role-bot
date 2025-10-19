@@ -144,13 +144,25 @@ async function registerCommands() {
 }
 
 /* ============================================================
-   STATUS UPDATER (1 per kanaal)
+   STATUS UPDATER
 ============================================================ */
 let statusInterval = null;
 const buildStatusEmbed = (guildName) => {
   const uptime = formatHMS(process.uptime());
   const ping = Math.max(0, Math.round(client.ws.ping));
-  const lastUpdate = fmtDate();
+  const now = new Date();
+  const tijd = now.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+
+  const isToday = (() => {
+    const t = new Date();
+    return now.getDate() === t.getDate() &&
+           now.getMonth() === t.getMonth() &&
+           now.getFullYear() === t.getFullYear();
+  })();
+  const footerTime = isToday
+    ? `vandaag om ${tijd}`
+    : `${now.toLocaleDateString('nl-NL')} ${tijd}`;
+
   return new EmbedBuilder()
     .setColor(0x7352FF)
     .setTitle('🕒 Phantom Forge Roles Bot Status')
@@ -158,9 +170,12 @@ const buildStatusEmbed = (guildName) => {
       { name: 'Active:', value: '✅ Online', inline: false },
       { name: 'Uptime', value: `\`${uptime}\``, inline: true },
       { name: 'Ping', value: `${ping} ms`, inline: true },
-      { name: 'Last update', value: lastUpdate, inline: false },
+      { name: 'Last update', value: `${now.toLocaleDateString('nl-NL')} ${tijd}`, inline: false },
     )
-    .setFooter({ text: `Live updated every second | ${guildName}` });
+    .setFooter({
+      text: `Live updated every second | ${guildName} • ${footerTime}`,
+      iconURL: client.user?.displayAvatarURL({ size: 64 })
+    });
 };
 
 async function startStatusLoop() {
@@ -175,8 +190,9 @@ async function startStatusLoop() {
     let msg = (await channel.messages.fetch({ limit: 10 }))
       .find(m => m.author.id === client.user.id && m.embeds.length && m.embeds[0].title?.includes('Roles Bot Status'));
 
-    // Maak bericht als het er niet is
-    if (!msg) msg = await channel.send({ embeds: [buildStatusEmbed(guildName)] });
+    // Als er al een bericht is, verwijder het en maak opnieuw aan (1 actief bericht)
+    if (msg) await msg.delete().catch(() => {});
+    msg = await channel.send({ embeds: [buildStatusEmbed(guildName)] });
 
     if (statusInterval) clearInterval(statusInterval);
     statusInterval = setInterval(async () => {
@@ -299,4 +315,3 @@ if (!process.env.DISCORD_TOKEN) {
   process.exit(1);
 }
 client.login(process.env.DISCORD_TOKEN);
-
