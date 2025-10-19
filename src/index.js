@@ -41,15 +41,6 @@ const formatHMS = (secs) => {
   const h = Math.floor(secs / 3600);
   return `${pad(h)}:${pad(m)}:${pad(s)}`;
 };
-const fmtDate = (d = new Date()) =>
-  d.toLocaleString(undefined, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
 
 /* ============================================================
    SLASH COMMANDS
@@ -150,8 +141,14 @@ let statusInterval = null;
 const buildStatusEmbed = (guildName) => {
   const uptime = formatHMS(process.uptime());
   const ping = Math.max(0, Math.round(client.ws.ping));
+
   const now = new Date();
-  const tijd = now.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+  const tijd = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const dateStr = now.toLocaleDateString('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    year: 'numeric'
+  });
 
   const isToday = (() => {
     const t = new Date();
@@ -159,9 +156,7 @@ const buildStatusEmbed = (guildName) => {
            now.getMonth() === t.getMonth() &&
            now.getFullYear() === t.getFullYear();
   })();
-  const footerTime = isToday
-    ? `vandaag om ${tijd}`
-    : `${now.toLocaleDateString('nl-NL')} ${tijd}`;
+  const footerTime = isToday ? `today at ${tijd}` : `${dateStr} ${tijd}`;
 
   return new EmbedBuilder()
     .setColor(0x7352FF)
@@ -170,7 +165,7 @@ const buildStatusEmbed = (guildName) => {
       { name: 'Active:', value: '✅ Online', inline: false },
       { name: 'Uptime', value: `\`${uptime}\``, inline: true },
       { name: 'Ping', value: `${ping} ms`, inline: true },
-      { name: 'Last update', value: `${now.toLocaleDateString('nl-NL')} ${tijd}`, inline: false },
+      { name: 'Last update', value: `${dateStr} ${tijd}`, inline: false },
     )
     .setFooter({
       text: `Live updated every second | ${guildName} • ${footerTime}`,
@@ -190,7 +185,6 @@ async function startStatusLoop() {
     let msg = (await channel.messages.fetch({ limit: 10 }))
       .find(m => m.author.id === client.user.id && m.embeds.length && m.embeds[0].title?.includes('Roles Bot Status'));
 
-    // Als er al een bericht is, verwijder het en maak opnieuw aan (1 actief bericht)
     if (msg) await msg.delete().catch(() => {});
     msg = await channel.send({ embeds: [buildStatusEmbed(guildName)] });
 
